@@ -15,6 +15,8 @@ const modalAction = document.getElementById("modalAction");
 const defaultState = {
   balance: 1000000,
   reputation: 0,
+  gameMinutes: 8 * 60,
+  lastTime: Date.now(),
   repairs: {
     wiring: false,
     panel: false,
@@ -30,8 +32,10 @@ const defaultState = {
 
 let state = structuredClone(defaultState);
 let modalActionHandler = () => closeDialog();
-
 let currentPanel = "district";
+let animationTime = 0;
+let lastFrame = 0;
+let saveTimer = 0;
 
 const repairItems = [
   { id: "wiring", name: "Замена проводки", icon: "⚡", price: 120000, description: "Новая электропроводка во всём доме" },
@@ -45,7 +49,53 @@ const repairItems = [
   { id: "furniture", name: "Новая мебель", icon: "🛋️", price: 100000, description: "Покупка мебели для дома" }
 ];
 
+// ВРЕМЯ ИГРЫ
+
+function getClock() {
+  const minutes = Math.floor(state.gameMinutes) % 1440;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+
+  return {
+    hours,
+    minutes: mins,
+    text: String(hours).padStart(2, "0") + ":" +
+      String(mins).padStart(2, "0")
+  };
+}
+
+function getTimeOfDay() {
+  const hour = getClock().hours;
+
+  if (hour >= 6 && hour < 9) return "Рассвет";
+  if (hour >= 9 && hour < 17) return "День";
+  if (hour >= 17 && hour < 20) return "Закат";
+  return "Ночь";
+}
+
+function getNightAmount() {
+  const hour = getClock().hours;
+
+  if (hour >= 20 || hour < 5) return 0.65;
+  if (hour >= 5 && hour < 7) return 0.65 * (7 - hour) / 2;
+  if (hour >= 18 && hour < 20) return 0.65 * (hour - 18) / 2;
+
+  return 0;
+}
+
+function updateGameTime(delta) {
+  // 5 реальных секунд = 1 игровая минута
+  state.gameMinutes += delta / 5000;
+
+  if (state.gameMinutes >= 1440) {
+    state.gameMinutes %= 1440;
+  }
+}
+
+// СОХРАНЕНИЕ
+
 function saveGame() {
+  state.lastTime = Date.now();
   localStorage.setItem("raion-save", JSON.stringify(state));
 }
 
@@ -62,11 +112,23 @@ function loadGame() {
           ...(saved.repairs || {})
         }
       };
+
+      // Продвижение игрового времени, пока игра была закрыта
+      if (saved.lastTime) {
+        const offlineTime = Math.max(
+          0,
+          Date.now() - saved.lastTime
+        );
+
+        state.gameMinutes += offlineTime / 5000;
+        state.gameMinutes %= 1440;
+      }
     }
   } catch (e) {
     state = structuredClone(defaultState);
   }
 
+  state.lastTime = Date.now();
   updateBalance();
 }
 
@@ -74,6 +136,8 @@ function updateBalance() {
   balance.textContent =
     state.balance.toLocaleString("ru-RU") + " ₽";
 }
+
+// ДИАЛОГИ
 
 function openDialog(
   title,
@@ -95,14 +159,13 @@ function closeDialog() {
 }
 
 modalClose.addEventListener("click", closeDialog);
-
-modalAction.addEventListener("click", () => {
-  modalActionHandler();
-});
+modalAction.addEventListener("click", () => modalActionHandler());
 
 modal.addEventListener("click", e => {
   if (e.target === modal) closeDialog();
 });
+
+// РЕМОНТ
 
 function completedRepairs() {
   return repairItems.filter(
@@ -130,8 +193,6 @@ function allUtilitiesRestored() {
     "sewage"
   ].every(id => state.repairs[id]);
 }
-
-// РЕМОНТ
 
 function renderRepairPanel() {
   const itemsHTML = repairItems.map(item => {
@@ -204,7 +265,7 @@ function buyRepair(id) {
   if (bonusReceived) {
     openDialog(
       "Первый успех!",
-      "Все коммуникации восстановлены! Баба Зина очень рада. Район получил первые 10 очков репутации и премию 100 000 ₽!",
+      "Все коммуникации восстановлены! Баба Зина очень рада. Район получил 10 очков репутации и премию 100 000 ₽!",
       "👵🏻"
     );
     return;
@@ -217,7 +278,7 @@ function buyRepair(id) {
   );
 }
 
-// ИГРОВЫЕ РАЗДЕЛЫ
+// РАЗДЕЛЫ ИГРЫ
 
 const panels = {
   district: {
@@ -228,9 +289,10 @@ const panels = {
         <p>Ты купил этот район всего за один рубль.</p>
         <p>Теперь предстоит вернуть ему жизнь!</p>
       </div>
-
       <div class="info-card">
         <h3>Состояние района</h3>
+        <p>🕒 Время: ${getClock().text}</p>
+        <p>🌤️ Период: ${getTimeOfDay()}</p>
         <p>⚡ Электричество: ${electricityRestored() ? "восстановлено" : "отключено"}</p>
         <p>💧 Вода: ${state.repairs.water ? "восстановлена" : "отключена"}</p>
         <p>🔥 Отопление: ${state.repairs.heating ? "восстановлено" : "отключено"}</p>
@@ -247,14 +309,12 @@ const panels = {
         <p>Познакомься с Бабой Зиной и осмотри старый дом.</p>
         <p>Статус: ${completedRepairs() > 0 ? "начато" : "ожидает выполнения"}.</p>
       </div>
-
       <div class="info-card">
         <h3>🔨 Задание №2. Возвращаем жизнь</h3>
         <p>Восстанови электричество, воду, отопление и канализацию.</p>
         <p>Прогресс: ${completedRepairs()} из ${repairItems.length}</p>
         <p>${allUtilitiesRestored() ? "✓ Коммуникации восстановлены!" : "Задание выполняется"}</p>
       </div>
-
       <div class="info-card">
         <h3>🛋️ Задание №3. Домашний уют</h3>
         <p>Отремонтируй комнаты и купи новую мебель.</p>
@@ -294,6 +354,7 @@ const panels = {
         <h3>👵🏻 Баба Зина</h3>
         <p>Первая жительница района.</p>
         <p>Настроение: ${allUtilitiesRestored() ? "счастлива" : "ждёт перемен"}.</p>
+        <p>Сейчас: ${getTimeOfDay().toLowerCase()}.</p>
       </div>`
   }
 };
@@ -305,7 +366,6 @@ function showPanel(name) {
     renderRepairPanel();
   } else {
     const panel = panels[name];
-
     if (!panel) return;
 
     panelHeading.textContent = panel.title;
@@ -379,20 +439,13 @@ function tree(x, y) {
   ctx.fill();
 }
 
-// НОВЫЙ ВНЕШНИЙ ВИД ДОМА
+// ДОМ
 
 function house(x, y) {
   const p = iso(x, y);
 
   const repaired = state.repairs.rooms;
-  const electricity =
-    state.repairs.wiring &&
-    state.repairs.panel &&
-    state.repairs.lighting;
-
-  const wallFront = repaired ? "#e5d4b5" : "#b69d7e";
-  const wallSide = repaired ? "#c6ad8b" : "#927b63";
-  const roofColor = repaired ? "#a94f40" : "#75483e";
+  const electricity = electricityRestored();
 
   // Боковая стена
   ctx.beginPath();
@@ -401,18 +454,18 @@ function house(x, y) {
   ctx.lineTo(p.x + 43, p.y - 27);
   ctx.lineTo(p.x, p.y - 7);
   ctx.closePath();
-  ctx.fillStyle = wallSide;
+  ctx.fillStyle = repaired ? "#c6ad8b" : "#927b63";
   ctx.fill();
 
   // Передняя стена
-  ctx.fillStyle = wallFront;
+  ctx.fillStyle = repaired ? "#e5d4b5" : "#b69d7e";
   ctx.fillRect(p.x - 43, p.y - 65, 43, 58);
 
   ctx.strokeStyle = "#594737";
   ctx.lineWidth = 2;
   ctx.strokeRect(p.x - 43, p.y - 65, 43, 58);
 
-  // Доски старого фасада
+  // Фасад
   if (!repaired) {
     ctx.strokeStyle = "#8d745a";
     ctx.lineWidth = 1;
@@ -442,7 +495,7 @@ function house(x, y) {
   ctx.lineTo(p.x + 51, p.y - 85);
   ctx.lineTo(p.x, p.y - 38);
   ctx.closePath();
-  ctx.fillStyle = roofColor;
+  ctx.fillStyle = repaired ? "#a94f40" : "#75483e";
   ctx.fill();
 
   ctx.strokeStyle = "#55352e";
@@ -511,7 +564,7 @@ function house(x, y) {
   ctx.fillStyle = "#593c34";
   ctx.fillRect(p.x + 21, p.y - 114, 16, 5);
 
-  // Цветочные горшки после покупки мебели
+  // Цветы после покупки мебели
   if (state.repairs.furniture) {
     ctx.fillStyle = "#a45d43";
     ctx.fillRect(p.x - 42, p.y - 11, 9, 8);
@@ -523,45 +576,151 @@ function house(x, y) {
     ctx.arc(p.x + 27, p.y - 16, 6, 0, Math.PI * 2);
     ctx.fill();
   }
-
-  // Свет в окнах
-  if (electricity) {
-    ctx.fillStyle = "rgba(255, 220, 120, 0.13)";
-    ctx.beginPath();
-    ctx.arc(p.x - 27, p.y - 49, 24, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Табличка с номером дома
-  ctx.fillStyle = "#f0e3c7";
-  ctx.fillRect(p.x - 7, p.y - 63, 13, 9);
-
-  ctx.fillStyle = "#493d32";
-  ctx.font = "7px sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("1", p.x, p.y - 56);
 }
 
-function person(x, y, color, name) {
+// ЖИТЕЛИ С АНИМАЦИЕЙ
+
+function getBabaPosition() {
+  return {
+    x: 1 + Math.sin(animationTime * 0.0007) * 0.65,
+    y: 2 + Math.cos(animationTime * 0.0005) * 0.3
+  };
+}
+
+function getPlayerPosition() {
+  return {
+    x: -1 + Math.sin(animationTime * 0.0005) * 0.35,
+    y: 2
+  };
+}
+
+function person(x, y, color, name, moving = false) {
   const p = iso(x, y);
 
-  ctx.fillStyle = color;
-  ctx.fillRect(p.x - 8, p.y - 22, 16, 21);
+  const step = moving
+    ? Math.sin(animationTime * 0.008) * 3
+    : 0;
 
+  // Тень
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y, 10, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Ноги
+  ctx.strokeStyle = "#39332e";
+  ctx.lineWidth = 4;
+
+  ctx.beginPath();
+  ctx.moveTo(p.x - 3, p.y - 8);
+  ctx.lineTo(p.x - 4 - step, p.y);
+  ctx.moveTo(p.x + 3, p.y - 8);
+  ctx.lineTo(p.x + 4 + step, p.y);
+  ctx.stroke();
+
+  // Тело
+  ctx.fillStyle = color;
+  ctx.fillRect(p.x - 8, p.y - 22, 16, 17);
+
+  // Голова
   ctx.fillStyle = "#e6b58e";
   ctx.beginPath();
   ctx.arc(p.x, p.y - 29, 8, 0, Math.PI * 2);
   ctx.fill();
 
+  // Волосы Бабы Зины
+  if (name === "Баба Зина") {
+    ctx.fillStyle = "#e2e0d5";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y - 33, 8, Math.PI, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Имя
   ctx.fillStyle = "#fff";
   ctx.font = "11px sans-serif";
   ctx.textAlign = "center";
+  ctx.shadowColor = "#333";
+  ctx.shadowBlur = 4;
   ctx.fillText(name, p.x, p.y - 43);
+  ctx.shadowBlur = 0;
 }
+
+// НЕБО И ОСВЕЩЕНИЕ
+
+function drawSkyOverlay() {
+  const darkness = getNightAmount();
+
+  if (darkness <= 0) return;
+
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+
+  ctx.fillStyle = `rgba(15, 24, 53, ${darkness})`;
+  ctx.fillRect(0, 0, w, h);
+
+  // Лунное свечение
+  const moonX = w - 55;
+  const moonY = 48;
+
+  ctx.fillStyle = "#f4edc9";
+  ctx.beginPath();
+  ctx.arc(moonX, moonY, 13, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Звёзды
+  ctx.fillStyle = "rgba(255,255,230,0.85)";
+
+  for (let i = 0; i < 18; i++) {
+    const sx = (i * 73 + 31) % Math.max(w, 1);
+    const sy = (i * 37 + 17) % Math.max(100, h * 0.55);
+
+    ctx.beginPath();
+    ctx.arc(sx, sy, i % 3 === 0 ? 2 : 1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Свет окон поверх ночного затемнения
+  if (electricityRestored()) {
+    const p = iso(0, 0);
+
+    ctx.fillStyle = "rgba(255, 210, 100, 0.95)";
+    ctx.fillRect(p.x - 35, p.y - 57, 16, 15);
+    ctx.fillRect(p.x + 16, p.y - 76, 16, 15);
+  }
+}
+
+function drawTimeLabel() {
+  const clock = getClock();
+  const w = canvas.clientWidth;
+
+  ctx.fillStyle = "rgba(25,35,30,0.75)";
+  ctx.beginPath();
+  ctx.roundRect(w - 115, 12, 103, 35, 9);
+  ctx.fill();
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 15px sans-serif";
+  ctx.textAlign = "center";
+
+  const icon = getTimeOfDay() === "Ночь" ? "🌙" :
+    getTimeOfDay() === "Закат" ? "🌇" :
+    getTimeOfDay() === "Рассвет" ? "🌅" : "☀️";
+
+  ctx.fillText(
+    icon + " " + clock.text,
+    w - 63,
+    35
+  );
+}
+
+// ПОЛНАЯ ОТРИСОВКА МИРА
 
 function drawWorld() {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
+
+  if (!w || !h) return;
 
   ctx.clearRect(0, 0, w, h);
 
@@ -606,14 +765,61 @@ function drawWorld() {
   tree(3, 1);
   tree(-4, 3);
 
-  // Дом и жители
+  // Дом
   house(0, 0);
 
-  person(-1, 2, "#456e9b", "Вы");
-  person(1, 2, "#a94d45", "Баба Зина");
+  // Жители
+  const player = getPlayerPosition();
+  const baba = getBabaPosition();
+
+  person(
+    player.x,
+    player.y,
+    "#456e9b",
+    "Вы",
+    true
+  );
+
+  person(
+    baba.x,
+    baba.y,
+    "#a94d45",
+    "Баба Зина",
+    true
+  );
+
+  // Ночь поверх мира
+  drawSkyOverlay();
+
+  // Часы поверх затемнения
+  drawTimeLabel();
 }
 
-// ИЗМЕНЕНИЕ РАЗМЕРА КАРТЫ
+// АНИМАЦИЯ ИГРЫ
+
+function gameLoop(timestamp) {
+  if (!lastFrame) lastFrame = timestamp;
+
+  const delta = Math.min(timestamp - lastFrame, 1000);
+  lastFrame = timestamp;
+
+  animationTime += delta;
+
+  updateGameTime(delta);
+
+  saveTimer += delta;
+
+  if (saveTimer >= 10000) {
+    saveGame();
+    saveTimer = 0;
+  }
+
+  drawWorld();
+
+  requestAnimationFrame(gameLoop);
+}
+
+// РАЗМЕР КАРТЫ
 
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
@@ -636,7 +842,8 @@ canvas.addEventListener("click", event => {
   const y = event.clientY - rect.top;
 
   const h = iso(0, 0);
-  const b = iso(1, 2);
+  const baba = getBabaPosition();
+  const b = iso(baba.x, baba.y);
 
   if (
     Math.abs(x - h.x) < 55 &&
@@ -657,8 +864,8 @@ canvas.addEventListener("click", event => {
   }
 
   if (
-    Math.abs(x - b.x) < 35 &&
-    Math.abs(y - (b.y - 20)) < 35
+    Math.abs(x - b.x) < 40 &&
+    Math.abs(y - (b.y - 20)) < 40
   ) {
     openDialog(
       "Баба Зина",
@@ -683,9 +890,13 @@ document.getElementById("homeView").addEventListener("click", () => {
 
 window.addEventListener("resize", resizeCanvas);
 
+window.addEventListener("beforeunload", saveGame);
+
 loadGame();
 showPanel("district");
 resizeCanvas();
+
+requestAnimationFrame(gameLoop);
 
 setTimeout(() => {
   openDialog(
